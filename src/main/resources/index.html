@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mini-redis dashboard</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --line: #2b323c; --text: #e6edf3; --muted: #8b949e;
+    --accent: #ff6b5e; --ok: #3fb950; --bad: #f85149;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #f6f8fa; --panel: #fff; --line: #d0d7de; --text: #1f2328; --muted: #59636e;
+            --accent: #d1242f; --ok: #1a7f37; --bad: #cf222e; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 56px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 24px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+       margin: 0 0 10px; font-weight: 600; }
+  .muted { color: var(--muted); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
+  .dot.down { background: var(--bad); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+  .tile .value { font: 600 26px var(--mono); font-variant-numeric: tabular-nums; }
+  .chart { margin-top: 10px; }
+  svg { display: block; width: 100%; height: 120px; }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; margin-top: 10px; }
+  .scroll { overflow: auto; max-height: 330px; }
+  table { border-collapse: collapse; width: 100%; font: 13px var(--mono); }
+  th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
+  td.preview { max-width: 180px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
+  td.num, th.num { text-align: right; padding-right: 0; font-variant-numeric: tabular-nums; }
+  #log { font: 13px/1.5 var(--mono); height: 286px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  #log .cmd { color: var(--accent); }
+  form { display: flex; gap: 8px; margin-top: 10px; }
+  input { flex: 1; min-width: 0; font: 13px var(--mono); color: inherit; background: var(--bg);
+          border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
+  button { font: 600 13px system-ui, sans-serif; color: #fff; background: var(--accent); border: 0;
+           border-radius: 8px; padding: 0 16px; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>mini-redis</h1>
+    <span class="muted"><span class="dot" id="dot"></span><span id="state">connecting…</span></span>
+  </header>
+
+  <section class="tiles">
+    <div class="panel tile"><h2>Commands / sec</h2><div class="value" id="ops">–</div></div>
+    <div class="panel tile"><h2>Connected clients</h2><div class="value" id="clients">–</div></div>
+    <div class="panel tile"><h2>Keys</h2><div class="value" id="keys">–</div></div>
+    <div class="panel tile"><h2>JVM memory</h2><div class="value" id="memory">–</div></div>
+  </section>
+
+  <section class="panel chart">
+    <h2>Commands per second, last 60 s <span id="peak"></span></h2>
+    <svg id="chart" viewBox="0 0 600 120" preserveAspectRatio="none" role="img" aria-label="Commands per second chart">
+      <path id="area" fill="var(--accent)" opacity=".18"></path>
+      <path id="curve" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"></path>
+    </svg>
+  </section>
+
+  <section class="cols">
+    <div class="panel">
+      <h2>Keys <span id="shown"></span></h2>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Key</th><th>Value</th><th class="num">Bytes</th><th class="num">TTL</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Console</h2>
+      <pre id="log" aria-live="polite"><span class="muted">Type a command, for example: SET greeting "hello world" EX 30</span>
+</pre>
+      <form id="form">
+        <input id="cmd" aria-label="Redis command" placeholder="PING" autocomplete="off" spellcheck="false">
+        <button>Run</button>
+      </form>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const number = new Intl.NumberFormat("en-US");
+// values that come from the server are written with textContent, never innerHTML
+const cell = (text, cls) => { const td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; return td; };
+
+function ttl(ms) {
+  if (ms < 0) return "–";
+  return ms >= 60000 ? Math.round(ms / 60000) + " min" : (ms / 1000).toFixed(1) + " s";
+}
+
+function draw(history) {
+  const peak = Math.max(...history, 1);
+  const step = 600 / (history.length - 1);
+  const points = history.map((v, i) => `${(i * step).toFixed(1)},${(116 - (v / peak) * 108).toFixed(1)}`);
+  $("curve").setAttribute("d", "M" + points.join(" L"));
+  $("area").setAttribute("d", "M0,120 L" + points.join(" L") + " L600,120 Z");
+  $("peak").textContent = "· peak " + number.format(peak);
+}
+
+async function refresh() {
+  try {
+    const [stats, keys] = await Promise.all([
+      fetch("/api/stats").then((r) => r.json()),
+      fetch("/api/keys").then((r) => r.json()),
+    ]);
+    $("dot").className = "dot"; $("state").textContent = "up " + number.format(stats.uptime_s) + " s";
+    $("ops").textContent = number.format(stats.history[stats.history.length - 1]);
+    $("clients").textContent = number.format(stats.clients);
+    $("keys").textContent = number.format(stats.keys);
+    $("memory").textContent = (stats.memory_bytes / 1048576).toFixed(0) + " MB";
+    draw(stats.history);
+    $("shown").textContent = keys.total > keys.keys.length ? `· first ${keys.keys.length} of ${number.format(keys.total)}` : "";
+    $("rows").replaceChildren(...keys.keys.map((k) => {
+      const tr = document.createElement("tr");
+      tr.append(cell(k.key), cell(k.preview, "preview"), cell(number.format(k.size), "num"), cell(ttl(k.ttl_ms), "num"));
+      return tr;
+    }));
+  } catch (err) {
+    $("dot").className = "dot down"; $("state").textContent = "server not reachable";
+  }
+}
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const line = $("cmd").value.trim();
+  if (!line) return;
+  $("cmd").value = "";
+  const log = $("log");
+  const cmd = document.createElement("span");
+  cmd.className = "cmd"; cmd.textContent = "> " + line + "\n";
+  log.append(cmd);
+  try {
+    const res = await fetch("/api/exec", { method: "POST", headers: { "X-Mini-Redis": "1" }, body: line });
+    log.append((await res.json()).reply + "\n");
+  } catch (err) {
+    log.append("(error) could not reach the server\n");
+  }
+  log.scrollTop = log.scrollHeight;
+  refresh();
+});
+
+refresh();
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>
