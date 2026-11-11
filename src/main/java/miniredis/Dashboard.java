@@ -38,6 +38,7 @@ final class Dashboard {
         });
         http.createContext("/api/stats", exchange -> send(exchange, 200, "application/json", stats(server)));
         http.createContext("/api/keys", exchange -> send(exchange, 200, "application/json", keys(server.store)));
+        http.createContext("/api/hot", exchange -> send(exchange, 200, "application/json", hot(server.stats)));
         http.createContext("/api/exec", exchange -> {
             // A custom header cannot be sent cross-origin without a CORS preflight, which this
             // server never approves. That stops other websites from running commands via the browser.
@@ -70,6 +71,23 @@ final class Dashboard {
                 + ",\"memory_bytes\":" + (runtime.totalMemory() - runtime.freeMemory())
                 + ",\"history\":[" + LongStream.of(server.stats.history()).mapToObj(Long::toString)
                         .collect(Collectors.joining(",")) + "]}";
+    }
+
+    private static String hot(Stats stats) {
+        String keys = stats.hotKeys.top(6).stream()
+                .map(entry -> "{\"key\":" + json(entry.key()) + ",\"count\":" + entry.count()
+                        + ",\"error\":" + entry.error() + "}")
+                .collect(Collectors.joining(","));
+        String commands = stats.timings.entrySet().stream()
+                .sorted((a, b) -> Long.compare(b.getValue()[0].sum(), a.getValue()[0].sum()))
+                .limit(8)
+                .map(entry -> {
+                    long calls = entry.getValue()[0].sum();
+                    long nanos = calls == 0 ? 0 : entry.getValue()[1].sum() / calls;
+                    return "{\"name\":" + json(entry.getKey()) + ",\"calls\":" + calls + ",\"avgNanos\":" + nanos + "}";
+                })
+                .collect(Collectors.joining(","));
+        return "{\"tracked\":" + stats.hotKeys.tracked() + ",\"keys\":[" + keys + "],\"commands\":[" + commands + "]}";
     }
 
     private static String keys(Store store) {

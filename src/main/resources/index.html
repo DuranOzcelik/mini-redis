@@ -3,134 +3,242 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mini-redis dashboard</title>
+<title>mini-redis</title>
 <style>
   :root {
-    --bg: #0d1117; --panel: #161b22; --line: #2b323c; --text: #e6edf3; --muted: #8b949e;
-    --accent: #ff6b5e; --ok: #3fb950; --bad: #f85149;
-    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
-  }
-  @media (prefers-color-scheme: light) {
-    :root { --bg: #f6f8fa; --panel: #fff; --line: #d0d7de; --text: #1f2328; --muted: #59636e;
-            --accent: #d1242f; --ok: #1a7f37; --bad: #cf222e; }
+    --base: #15110f; --well: #0e0b0a; --rule: #332b27; --rule-soft: #251f1c; --text: #efe7de; --soft: #a99e93;
+    --hot: #ee5a3f; --hot-dim: #6b2a1e; --live: #7fc47a; --warn: #e8b04a;
+    --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: "Cascadia Mono", "SF Mono", Consolas, ui-monospace, monospace;
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
-  main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 56px; }
-  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
-  h1 { font-size: 24px; margin: 0; letter-spacing: -0.01em; }
-  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
-       margin: 0 0 10px; font-weight: 600; }
-  .muted { color: var(--muted); }
-  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 6px; }
-  .dot.down { background: var(--bad); }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
-  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; min-width: 0; }
-  .tile .value { font: 600 26px var(--mono); font-variant-numeric: tabular-nums; }
-  .chart { margin-top: 10px; }
-  svg { display: block; width: 100%; height: 120px; }
-  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 10px; margin-top: 10px; }
-  .scroll { overflow: auto; max-height: 330px; }
-  table { border-collapse: collapse; width: 100%; font: 13px var(--mono); }
-  th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line); white-space: nowrap; }
-  th { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: var(--panel); }
-  td.preview { max-width: 180px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
-  td.num, th.num { text-align: right; padding-right: 0; font-variant-numeric: tabular-nums; }
-  #log { font: 13px/1.5 var(--mono); height: 286px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
-  #log .cmd { color: var(--accent); }
-  form { display: flex; gap: 8px; margin-top: 10px; }
-  input { flex: 1; min-width: 0; font: 13px var(--mono); color: inherit; background: var(--bg);
-          border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; }
-  button { font: 600 13px system-ui, sans-serif; color: #fff; background: var(--accent); border: 0;
-           border-radius: 8px; padding: 0 16px; cursor: pointer; }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  html { color-scheme: dark; scrollbar-color: var(--rule) var(--base); }
+  ::selection { background: var(--hot); color: #1a0d09; }
+  body { margin: 0; background: var(--base); color: var(--text); font: 14px/1.5 var(--sans); }
+  main { max-width: 1160px; margin: 0 auto; padding: 0 24px 64px; }
+  .num, td, .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* status line: facts in one row, not tiles */
+  header { display: flex; align-items: baseline; gap: 8px 28px; flex-wrap: wrap; padding: 22px 0 18px; border-bottom: 1px solid var(--rule); }
+  h1 { font: 650 20px var(--sans); margin: 0; letter-spacing: -0.01em; }
+  .state { color: var(--soft); display: inline-flex; align-items: center; gap: 8px; }
+  .lamp { width: 8px; height: 8px; border-radius: 50%; background: var(--live); }
+  .lamp.down { background: var(--hot); }
+  .facts { display: flex; gap: 6px 28px; flex-wrap: wrap; margin-left: auto; color: var(--soft); }
+  .facts b { font: 600 14px var(--mono); color: var(--text); margin-right: 6px; }
+
+  h2 { font: 650 16px var(--sans); margin: 0; }
+  .head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 34px 0 12px; }
+  .head span { color: var(--soft); font-size: 13px; }
+
+  /* throughput */
+  .now { font: 600 44px/1 var(--mono); letter-spacing: -0.03em; margin: 30px 0 2px; }
+  .now small { font: 400 14px var(--sans); color: var(--soft); letter-spacing: 0; margin-left: 10px; }
+  .plot { display: grid; grid-template-columns: 52px 1fr; margin-top: 16px; }
+  .axis { display: flex; flex-direction: column; justify-content: space-between; font: 11px var(--mono); color: var(--soft); padding: 0 10px 0 0; text-align: right; height: 170px; }
+  .canvas { position: relative; height: 170px; border-bottom: 1px solid var(--rule);
+            background: linear-gradient(var(--rule-soft) 1px, transparent 1px) 0 0 / 100% 25%; }
+  svg { display: block; width: 100%; height: 100%; }
+  .xaxis { grid-column: 2; display: flex; justify-content: space-between; font: 11px var(--mono); color: var(--soft); padding-top: 6px; }
+
+  .split { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 0 44px; }
+  @media (max-width: 860px) { .split { grid-template-columns: minmax(0, 1fr); } .facts { margin-left: 0; } }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { text-align: left; font: 600 12px var(--sans); color: var(--soft); padding: 0 14px 8px 0; border-bottom: 1px solid var(--rule); white-space: nowrap; }
+  td { padding: 7px 14px 7px 0; border-bottom: 1px solid var(--rule-soft); white-space: nowrap; }
+  th.r, td.r { text-align: right; padding-right: 0; }
+  td.preview { max-width: 220px; overflow: hidden; text-overflow: ellipsis; color: var(--soft); }
+  td.expiring { color: var(--warn); }
+  .scroll { max-height: 300px; overflow: auto; }
+  .empty { color: var(--soft); padding: 14px 0; max-width: 52ch; }
+
+  /* console */
+  .term { background: var(--well); border: 1px solid var(--rule); border-radius: 4px; }
+  #log { font: 13px/1.6 var(--mono); height: 252px; overflow: auto; margin: 0; padding: 12px 14px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #log .cmd { color: var(--hot); }
+  #log .hint { color: var(--soft); }
+  form { display: flex; align-items: center; border-top: 1px solid var(--rule); }
+  form label { font: 13px var(--mono); color: var(--hot); padding-left: 14px; }
+  input { flex: 1; min-width: 0; border: 0; background: none; color: var(--text); font: 13px var(--mono); padding: 11px 10px; caret-color: var(--hot); }
+  input:focus { outline: none; }
+  input::placeholder { color: #8a8076; }
+  .term:focus-within { border-color: var(--hot); }
+  button { border: 0; border-left: 1px solid var(--rule); background: none; color: var(--text); font: 600 13px var(--sans);
+           padding: 0 16px; align-self: stretch; cursor: pointer; transition: background .16s, color .16s; }
+  button:hover { background: var(--hot); color: #1a0d09; }
+  button:focus-visible { outline: 2px solid var(--hot); outline-offset: -2px; }
+
+  /* hot keys: ranked bars */
+  .rank { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 14px; padding: 8px 0; border-bottom: 1px solid var(--rule-soft); font: 13px var(--mono); }
+  .rank .key { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rank .meter { grid-column: 1 / -1; height: 3px; background: var(--rule-soft); }
+  .rank .meter i { display: block; height: 100%; background: var(--hot); transition: width .25s cubic-bezier(.2, .8, .2, 1); }
+  .rank .approx { color: var(--soft); }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 </style>
 </head>
 <body>
 <main>
   <header>
     <h1>mini-redis</h1>
-    <span class="muted"><span class="dot" id="dot"></span><span id="state">connecting…</span></span>
+    <span class="state"><span class="lamp" id="lamp"></span><span id="state">connecting</span></span>
+    <div class="facts">
+      <span><b id="clients">0</b>clients</span>
+      <span><b id="keys">0</b>keys</span>
+      <span><b id="memory">0 MB</b>heap in use</span>
+      <span><b id="total">0</b>commands served</span>
+    </div>
   </header>
 
-  <section class="tiles">
-    <div class="panel tile"><h2>Commands / sec</h2><div class="value" id="ops">–</div></div>
-    <div class="panel tile"><h2>Connected clients</h2><div class="value" id="clients">–</div></div>
-    <div class="panel tile"><h2>Keys</h2><div class="value" id="keys">–</div></div>
-    <div class="panel tile"><h2>JVM memory</h2><div class="value" id="memory">–</div></div>
-  </section>
+  <div class="now"><span id="ops">0</span><small>commands per second</small></div>
+  <div class="plot">
+    <div class="axis" id="yaxis"></div>
+    <div class="canvas">
+      <svg viewBox="0 0 600 170" preserveAspectRatio="none" role="img" aria-label="Commands per second over the last minute">
+        <path id="area" fill="var(--hot)" opacity=".16"></path>
+        <path id="curve" fill="none" stroke="var(--hot)" stroke-width="1.75" vector-effect="non-scaling-stroke" stroke-linejoin="round"></path>
+      </svg>
+    </div>
+    <div class="xaxis"><span>60 s ago</span><span>45</span><span>30</span><span>15</span><span>now</span></div>
+  </div>
 
-  <section class="panel chart">
-    <h2>Commands per second, last 60 s <span id="peak"></span></h2>
-    <svg id="chart" viewBox="0 0 600 120" preserveAspectRatio="none" role="img" aria-label="Commands per second chart">
-      <path id="area" fill="var(--accent)" opacity=".18"></path>
-      <path id="curve" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"></path>
-    </svg>
-  </section>
-
-  <section class="cols">
-    <div class="panel">
-      <h2>Keys <span id="shown"></span></h2>
+  <div class="split">
+    <section>
+      <div class="head"><h2>Keys</h2><span id="shown"></span></div>
       <div class="scroll">
         <table>
-          <thead><tr><th>Key</th><th>Value</th><th class="num">Bytes</th><th class="num">TTL</th></tr></thead>
+          <thead><tr><th>Key</th><th>Value</th><th class="r">Bytes</th><th class="r">Expires in</th></tr></thead>
           <tbody id="rows"></tbody>
         </table>
+        <p class="empty" id="no-keys" hidden>No keys yet. Run <span class="mono">SET greeting hello EX 30</span> in the console and watch it expire here.</p>
       </div>
-    </div>
-    <div class="panel">
-      <h2>Console</h2>
-      <pre id="log" aria-live="polite"><span class="muted">Type a command, for example: SET greeting "hello world" EX 30</span>
+    </section>
+    <section>
+      <div class="head"><h2>Console</h2><span>same commands as redis-cli</span></div>
+      <div class="term">
+        <pre id="log" aria-live="polite"><span class="hint">Try  SET greeting "hello world" EX 30   then  TTL greeting   or  HOTKEYS</span>
 </pre>
-      <form id="form">
-        <input id="cmd" aria-label="Redis command" placeholder="PING" autocomplete="off" spellcheck="false">
-        <button>Run</button>
-      </form>
-    </div>
-  </section>
+        <form id="form">
+          <label for="cmd">&gt;</label>
+          <input id="cmd" placeholder="PING" autocomplete="off" spellcheck="false">
+          <button>Run</button>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <div class="split">
+    <section>
+      <div class="head"><h2>Hot keys</h2><span id="tracked"></span></div>
+      <div id="hot"></div>
+      <p class="empty" id="no-hot">Nothing has been read or written yet.</p>
+    </section>
+    <section>
+      <div class="head"><h2>Commands</h2><span>average time inside the server</span></div>
+      <table>
+        <thead><tr><th>Command</th><th class="r">Calls</th><th class="r">Share</th><th class="r">Avg</th></tr></thead>
+        <tbody id="commands"></tbody>
+      </table>
+    </section>
+  </div>
 </main>
 
 <script>
 const $ = (id) => document.getElementById(id);
 const number = new Intl.NumberFormat("en-US");
 // values that come from the server are written with textContent, never innerHTML
-const cell = (text, cls) => { const td = document.createElement("td"); td.textContent = text; if (cls) td.className = cls; return td; };
+const el = (tag, cls, text) => {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+};
 
 function ttl(ms) {
-  if (ms < 0) return "–";
+  if (ms < 0) return "never";
+  if (ms >= 3600000) return (ms / 3600000).toFixed(1) + " h";
   return ms >= 60000 ? Math.round(ms / 60000) + " min" : (ms / 1000).toFixed(1) + " s";
 }
 
+function duration(nanos) {
+  if (nanos < 1000) return nanos + " ns";
+  if (nanos < 1e6) return (nanos / 1000).toFixed(1) + " µs";
+  return (nanos / 1e6).toFixed(1) + " ms";
+}
+
+function niceCeiling(value) {
+  const magnitude = Math.pow(10, Math.floor(Math.log10(Math.max(value, 1))));
+  return [1, 2, 4, 5, 10].map((m) => m * magnitude).find((c) => c >= value) || 10 * magnitude;
+}
+
 function draw(history) {
-  const peak = Math.max(...history, 1);
+  const top = niceCeiling(Math.max(...history, 4));
   const step = 600 / (history.length - 1);
-  const points = history.map((v, i) => `${(i * step).toFixed(1)},${(116 - (v / peak) * 108).toFixed(1)}`);
+  const points = history.map((v, i) => `${(i * step).toFixed(1)},${(170 - (v / top) * 170).toFixed(1)}`);
   $("curve").setAttribute("d", "M" + points.join(" L"));
-  $("area").setAttribute("d", "M0,120 L" + points.join(" L") + " L600,120 Z");
-  $("peak").textContent = "· peak " + number.format(peak);
+  $("area").setAttribute("d", "M0,170 L" + points.join(" L") + " L600,170 Z");
+  $("yaxis").replaceChildren(...[1, .75, .5, .25, 0].map((f) => el("span", "", number.format(Math.round(top * f)))));
 }
 
 async function refresh() {
+  let stats, keys, hot;
   try {
-    const [stats, keys] = await Promise.all([
-      fetch("/api/stats").then((r) => r.json()),
-      fetch("/api/keys").then((r) => r.json()),
-    ]);
-    $("dot").className = "dot"; $("state").textContent = "up " + number.format(stats.uptime_s) + " s";
-    $("ops").textContent = number.format(stats.history[stats.history.length - 1]);
-    $("clients").textContent = number.format(stats.clients);
-    $("keys").textContent = number.format(stats.keys);
-    $("memory").textContent = (stats.memory_bytes / 1048576).toFixed(0) + " MB";
-    draw(stats.history);
-    $("shown").textContent = keys.total > keys.keys.length ? `· first ${keys.keys.length} of ${number.format(keys.total)}` : "";
-    $("rows").replaceChildren(...keys.keys.map((k) => {
-      const tr = document.createElement("tr");
-      tr.append(cell(k.key), cell(k.preview, "preview"), cell(number.format(k.size), "num"), cell(ttl(k.ttl_ms), "num"));
-      return tr;
-    }));
+    [stats, keys, hot] = await Promise.all(["/api/stats", "/api/keys", "/api/hot"].map((u) => fetch(u).then((r) => r.json())));
   } catch (err) {
-    $("dot").className = "dot down"; $("state").textContent = "server not reachable";
+    $("lamp").className = "lamp down"; $("state").textContent = "server not reachable";
+    return;
   }
+  $("lamp").className = "lamp"; $("state").textContent = "up for " + number.format(stats.uptime_s) + " s";
+  $("ops").textContent = number.format(stats.history[stats.history.length - 1]);
+  $("clients").textContent = number.format(stats.clients);
+  $("keys").textContent = number.format(stats.keys);
+  $("memory").textContent = (stats.memory_bytes / 1048576).toFixed(0) + " MB";
+  $("total").textContent = number.format(stats.commands);
+  draw(stats.history);
+
+  $("shown").textContent = keys.total > keys.keys.length ? `first ${keys.keys.length} of ${number.format(keys.total)}` : "";
+  $("no-keys").hidden = keys.keys.length > 0;
+  $("rows").replaceChildren(...keys.keys.map((k) => {
+    const row = el("tr");
+    const soon = k.ttl_ms >= 0 && k.ttl_ms < 15000;
+    row.append(el("td", "", k.key), el("td", "preview", k.preview), el("td", "r", number.format(k.size)),
+      el("td", "r" + (soon ? " expiring" : ""), ttl(k.ttl_ms)));
+    return row;
+  }));
+
+  const most = hot.keys.length ? hot.keys[0].count : 1;
+  $("no-hot").hidden = hot.keys.length > 0;
+  $("tracked").textContent = hot.keys.length ? `top ${hot.keys.length} of ${hot.tracked} tracked, fixed memory` : "";
+  $("hot").replaceChildren(...hot.keys.map((k) => {
+    const row = el("div", "rank");
+    const count = el("span", "", number.format(k.count));
+    // Space-Saving can overcount by at most `error`; say so when it applies.
+    if (k.error > 0) count.append(el("span", "approx", " (at most " + number.format(k.error) + " too high)"));
+    const meter = el("div", "meter"); const fill = el("i"); fill.style.width = (k.count / most) * 100 + "%"; meter.append(fill);
+    row.append(el("span", "key", k.key), count, meter);
+    return row;
+  }));
+
+  const calls = hot.commands.reduce((sum, c) => sum + c.calls, 0) || 1;
+  $("commands").replaceChildren(...hot.commands.map((c) => {
+    const row = el("tr");
+    row.append(el("td", "", c.name), el("td", "r", number.format(c.calls)),
+      el("td", "r", ((c.calls / calls) * 100).toFixed(1) + " %"), el("td", "r", duration(c.avgNanos)));
+    return row;
+  }));
+}
+
+async function execute(line) {
+  const log = $("log");
+  log.append(el("span", "cmd", "> " + line + "\n"));
+  try {
+    const res = await fetch("/api/exec", { method: "POST", headers: { "X-Mini-Redis": "1" }, body: line });
+    log.append((await res.json()).reply + "\n");
+  } catch (err) {
+    log.append("(error) the server did not answer\n");
+  }
+  log.scrollTop = log.scrollHeight;
 }
 
 $("form").addEventListener("submit", async (e) => {
@@ -138,22 +246,16 @@ $("form").addEventListener("submit", async (e) => {
   const line = $("cmd").value.trim();
   if (!line) return;
   $("cmd").value = "";
-  const log = $("log");
-  const cmd = document.createElement("span");
-  cmd.className = "cmd"; cmd.textContent = "> " + line + "\n";
-  log.append(cmd);
-  try {
-    const res = await fetch("/api/exec", { method: "POST", headers: { "X-Mini-Redis": "1" }, body: line });
-    log.append((await res.json()).reply + "\n");
-  } catch (err) {
-    log.append("(error) could not reach the server\n");
-  }
-  log.scrollTop = log.scrollHeight;
+  await execute(line);
   refresh();
 });
 
-refresh();
-setInterval(refresh, 1000);
+// "?run=PING;TTL greeting" replays commands on load, so a link can show a prepared console.
+(async () => {
+  for (const line of (new URLSearchParams(location.search).get("run") || "").split(";").filter(Boolean)) await execute(line.trim());
+  refresh();
+  setInterval(refresh, 1000);
+})();
 </script>
 </body>
 </html>

@@ -6,17 +6,20 @@ dashboard.
 
 No runtime dependencies. Only the JDK.
 
-![Dashboard showing live throughput, keys with TTLs and a command console](docs/dashboard.png)
+![Dashboard: throughput chart, keys with expiry, console, hot keys and per-command timing](docs/dashboard.png)
 
 ## Features
 
 - RESP2 parser for array commands and inline commands, binary-safe keys and values
 - `PING` `ECHO` `SET` (with `EX`, `PX`, `NX`, `XX`) `GET` `DEL` `EXISTS` `INCR` `DECR` `INCRBY`
   `DECRBY` `EXPIRE` `PEXPIRE` `TTL` `PTTL` `PERSIST` `KEYS` `DBSIZE` `FLUSHALL` `INFO`
+- `HOTKEYS`: the most frequently used keys, found in fixed memory with the Space-Saving
+  algorithm
+- Call count and average execution time per command
 - Key expiry, both lazy (on access) and active (background sweep)
 - Pipelining: a batch of commands is answered with a single network write
 - One virtual thread per connection
-- Dashboard with throughput chart, key browser and command console
+- Dashboard with throughput chart, key browser, console, hot keys and command timing
 
 ## Run
 
@@ -43,6 +46,11 @@ OK
 (integer) 60
 127.0.0.1:6379> INCR page:views
 (integer) 1
+127.0.0.1:6379> HOTKEYS 2
+1) "session:9f2c41"
+2) (integer) 296175
+3) "page:views"
+4) (integer) 134112
 ```
 
 ## Design
@@ -52,11 +60,22 @@ Server      accepts connections, one virtual thread each
   Resp      decodes commands from bytes, encodes replies
   Commands  validates arguments, calls the store, writes the reply
   Store     ConcurrentHashMap of key -> (value, expiry time)
+  HotKeys   Space-Saving sketch of the most used keys
 Dashboard   JDK HttpServer exposing stats, keys and a console
 ```
 
 ## Details that were not obvious
 
+- **Finding hot keys without counting every key.** An exact counter per key needs memory
+  proportional to the number of keys, which is the thing a cache is short of. Space-Saving
+  keeps a fixed number of counters (64 here). When a new key arrives and all counters are in
+  use, the key with the smallest count is replaced and the newcomer inherits that count. A
+  count can therefore be too high but never too low, and each entry carries the size of its
+  possible error. A test pushes 11,000 distinct keys through 16 counters and still finds the
+  two heavy hitters, with the true count inside the reported bounds.
+- **Statistics must not become a memory leak.** Timing is kept per command name. Unknown
+  names all share one bucket, otherwise a client could grow the table by sending random
+  command names.
 - **Atomic commands without a global lock.** Real Redis is single threaded, which makes every
   command atomic for free. This server is multi threaded, so `INCR` and `SET NX` run inside
   `ConcurrentHashMap.compute`, which locks only the affected key. A test hammers one counter
@@ -86,9 +105,9 @@ Dashboard   JDK HttpServer exposing stats, keys and a console
 mvn test
 ```
 
-25 tests in three groups: protocol parsing (including malformed and truncated input), the
-store with a fake clock (expiry is tested without sleeping), and integration tests that talk
-to a running server over TCP.
+30 tests in four groups: protocol parsing (including malformed and truncated input), the
+store with a fake clock (expiry is tested without sleeping), the hot key sketch and its error
+bounds, and integration tests that talk to a running server over TCP.
 
 ## Limitations
 
@@ -96,6 +115,7 @@ to a running server over TCP.
 - No persistence, replication, transactions, pub/sub or `AUTH`. Because there is no `AUTH`,
   the server binds to the loopback interface only.
 - RESP2 only.
+- Hot key tracking takes one lock per key access. A busy server would sample instead.
 - Active expiry scans the whole keyspace once a second. Redis samples random keys instead,
   which scales better.
 
