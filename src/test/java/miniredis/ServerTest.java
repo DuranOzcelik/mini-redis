@@ -226,6 +226,18 @@ class ServerTest {
     }
 
     @Test
+    void hotkeysReportsTheMostUsedKeys() throws IOException {
+        try (Client c = new Client()) {
+            c.call("SET", "rare", "1");
+            for (int i = 0; i < 20; i++) {
+                c.call("GET", "popular");
+            }
+            assertEquals("1) \"popular\"\n2) (integer) 20", c.call("HOTKEYS", "1"));
+            assertEquals("(error) ERR value is not an integer or out of range", c.call("HOTKEYS", "many"));
+        }
+    }
+
+    @Test
     void commandNamesWorkUnderTurkishLocale() throws IOException {
         Locale original = Locale.getDefault();
         Locale.setDefault(Locale.forLanguageTag("tr-TR")); // "ping".toUpperCase() would be "PİNG"

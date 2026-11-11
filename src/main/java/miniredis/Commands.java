@@ -5,11 +5,17 @@ import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 /** Maps a parsed command to a Store operation and writes the RESP reply. */
 final class Commands {
     private static final String NOT_INTEGER = "ERR value is not an integer or out of range";
     private static final String SYNTAX = "ERR syntax error";
+    private static final Set<String> ONE_KEY = Set.of("GET", "SET", "INCR", "DECR", "INCRBY", "DECRBY",
+            "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST");
+    private static final Set<String> KNOWN = Set.of("PING", "ECHO", "GET", "SET", "DEL", "EXISTS", "INCR", "DECR",
+            "INCRBY", "DECRBY", "EXPIRE", "PEXPIRE", "TTL", "PTTL", "PERSIST", "KEYS", "DBSIZE", "FLUSHALL",
+            "FLUSHDB", "INFO", "HOTKEYS", "COMMAND", "CONFIG", "SELECT", "CLIENT");
 
     private final Store store;
     private final Stats stats;
@@ -22,8 +28,21 @@ final class Commands {
     void execute(List<byte[]> args, OutputStream out) throws IOException {
         // Locale.ROOT matters: on a Turkish system "ping".toUpperCase() is "PİNG", not "PING".
         String name = text(args.get(0)).toUpperCase(Locale.ROOT);
+        long started = System.nanoTime();
+        try {
+            dispatch(name, args, out);
+        } finally {
+            // Unknown names share one bucket, so a client cannot grow the table without limit.
+            stats.time(KNOWN.contains(name) ? name : "(unknown)", System.nanoTime() - started);
+        }
+    }
+
+    private void dispatch(String name, List<byte[]> args, OutputStream out) throws IOException {
         int argc = args.size() - 1;
         stats.commands.increment();
+        if (argc >= 1 && ONE_KEY.contains(name)) {
+            stats.hotKeys.record(key(args, 1));
+        }
         switch (name) {
             case "PING" -> {
                 if (argc == 0) {
@@ -56,6 +75,7 @@ final class Commands {
                 }
                 long count = 0;
                 for (int i = 1; i <= argc; i++) {
+                    stats.hotKeys.record(key(args, i));
                     if (name.equals("DEL") ? store.delete(key(args, i)) : store.exists(key(args, i))) {
                         count++;
                     }
@@ -122,6 +142,21 @@ final class Commands {
                 }
             }
             case "DBSIZE" -> Resp.integer(out, store.size());
+            case "HOTKEYS" -> {
+                Long limit = argc == 0 ? Long.valueOf(10) : argc == 1 ? integer(args.get(1)) : null;
+                if (argc > 1) {
+                    wrongArity(out, name);
+                } else if (limit == null || limit < 0) {
+                    Resp.error(out, NOT_INTEGER);
+                } else {
+                    List<HotKeys.Entry> top = stats.hotKeys.top((int) Math.min(limit, 1000));
+                    Resp.arrayHeader(out, top.size() * 2);
+                    for (HotKeys.Entry entry : top) {
+                        Resp.bulk(out, entry.key().getBytes(StandardCharsets.ISO_8859_1));
+                        Resp.integer(out, entry.count());
+                    }
+                }
+            }
             case "FLUSHALL", "FLUSHDB" -> {
                 store.clear();
                 Resp.simple(out, "OK");
